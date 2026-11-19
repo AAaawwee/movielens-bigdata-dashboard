@@ -22,6 +22,9 @@ users.dat
 *.parquet
 *.vmdk
 *.vmx
+!/infra/vmware/namenode/hadoop.vmx
+!/infra/vmware/datanode1/datanode1.vmx
+!/infra/vmware/datanode2/datanode2.vmx
 *.vmem
 *.vmss
 *.vmsn

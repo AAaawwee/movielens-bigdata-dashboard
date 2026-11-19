@@ -4,13 +4,13 @@
 
 ## 1. 导入已有课程镜像
 
-1. 将三台虚拟机分别解压到独立目录。每台保留虚拟磁盘描述文件及其全部 `-s001.vmdk` 等磁盘分片。已知的入口文件如下，其他批次的课程镜像以本地实际命名为准。
+1. 将三台虚拟机分别解压到独立目录。每台保留虚拟磁盘描述文件及其全部 `-s001.vmdk` 等磁盘分片。已有可用的 `.vmx` 时可直接打开。缺少配置时，从下表取对应文件并放到该节点的磁盘目录。其他批次的课程镜像以实际磁盘描述文件名为准。 [磁盘对应表](../infra/vmware/README.md)
 
    | 角色 | VMware 入口文件 |
    | --- | --- |
-   | NameNode、ResourceManager、Kafka | `namenode/hadoop.vmx` |
-   | DataNode、NodeManager | `datanode1/datanode1.vmx` |
-   | DataNode、NodeManager | `datanode2/datanode2.vmx` |
+   | NameNode、ResourceManager、Kafka | [namenode/hadoop.vmx](../infra/vmware/namenode/hadoop.vmx) |
+   | DataNode、NodeManager | [datanode1/datanode1.vmx](../infra/vmware/datanode1/datanode1.vmx) |
+   | DataNode、NodeManager | [datanode2/datanode2.vmx](../infra/vmware/datanode2/datanode2.vmx) |
 
 2. 在 VMware Workstation 依次打开三个 `.vmx`。把网卡连到同一个 NAT 网络（通常是 VMnet8）。复制到另一台主机时，若弹出提示，选择 **I copied it** 并重新核对 MAC 对应的地址。已有镜像迁移时应从完全关机的副本复制。 [VMware 复制说明](https://knowledge.broadcom.com/external/article/310359/copy-workstation-virtual-machine-from-on.html)
 3. 进入三台 Linux 虚拟机，运行 `hostname` 和 `ip -4 -o addr show scope global` 记录实际地址，修正三台的 `/etc/hosts`。根据第 2 节检查节点名称、地址解析和 SSH，替换课程镜像里不再使用的个人登录密钥和共享目录。

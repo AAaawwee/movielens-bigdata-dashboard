@@ -10,6 +10,8 @@
 
 在 VMware Workstation 启动或创建 `namenode`、`datanode1`、`datanode2`，三台连接到同一个 NAT 网络。首次配置按 [VMware 三节点复现指南](docs/vmware.md) 设置主机名、IP、SSH 和 Hadoop，初始化 Hive。使用已有课程镜像的同学也可以按指南导入。
 
+**三台 VM 的配置文件** [NameNode](infra/vmware/namenode/hadoop.vmx) · [DataNode 1](infra/vmware/datanode1/datanode1.vmx) · [DataNode 2](infra/vmware/datanode2/datanode2.vmx)。每个 `.vmx` 要和对应节点的虚拟磁盘及全部分片放在同一目录。已有完整镜像时可直接用镜像的 `.vmx`。 [磁盘对应表和导入步骤](infra/vmware/README.md)
+
 在 **NameNode** 上运行以下命令。若 Hadoop 安装位置不同，先把 `HADOOP_HOME` 改为实际路径。
 
 ```bash
@@ -107,6 +109,7 @@ flowchart LR
 | [pipeline/als/](pipeline/als/) | Scala ALS 作业及 PySpark 版本 |
 | [pipeline/streaming/](pipeline/streaming/) | Kafka 回放和 Structured Streaming |
 | [infra/hadoop/](infra/hadoop/) | 三节点 Hadoop 配置模板 |
+| [infra/vmware/](infra/vmware/) | 三台 VMware 的 `.vmx` 和磁盘对应表 |
 | [verification/](verification/) | Hive、Kafka、页面回归核验 |
 | [docs/](docs/) | 复现说明、验收结果和页面截图 |
 
