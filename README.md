@@ -2,6 +2,76 @@
 
 使用 Hadoop、Hive、Spark 和 Kafka 处理 MovieLens 1M，以 Flask API 和 ECharts 看板展示离线统计、历史评分回放、低分告警和个性化推荐。
 
+## 启动项目
+
+第一次复现按 **准备三台 VM → 生成数据和结果 → 启动看板** 的顺序执行。已有项目集群和 HDFS 结果时，可确认三台 VM 已启动后直接进入 [第 4 步](#4-在宿主机启动看板)。
+
+### 1. 准备三台 VMware 虚拟机
+
+在 VMware Workstation 启动或创建 `namenode`、`datanode1`、`datanode2`，三台连接到同一个 NAT 网络。首次配置按 [VMware 三节点复现指南](docs/vmware.md) 设置主机名、IP、SSH 和 Hadoop，初始化 Hive。使用已有课程镜像的同学也可以按指南导入。
+
+在 **NameNode** 上运行以下命令。若 Hadoop 安装位置不同，先把 `HADOOP_HOME` 改为实际路径。
+
+```bash
+export HADOOP_HOME="${HADOOP_HOME:-$HOME/hadoop-3.2.0}"
+"$HADOOP_HOME/bin/hdfs" dfsadmin -report
+"$HADOOP_HOME/bin/yarn" node -list
+```
+
+看到 **2 个在线 DataNode、2 个 RUNNING 的 NodeManager** 后，再开始生成项目数据。
+
+### 2. 克隆仓库
+
+在 **NameNode 虚拟机**保留一份仓库，用来执行数据流水线。在 **Windows 宿主机**也克隆一份，用来启动看板。若配置虚拟机时已克隆，直接进入已有目录即可。
+
+```bash
+git clone https://github.com/AAaawwee/movielens-bigdata-dashboard.git
+cd movielens-bigdata-dashboard
+```
+
+### 3. 在 NameNode 生成数据和结果
+
+从 [GroupLens](https://grouplens.org/datasets/movielens/1m/) 下载并解压 MovieLens 1M，在 **NameNode 的仓库目录**按 [部署与复现命令](docs/deployment.md#在集群上生成数据与结果) 依次执行 **HDFS 入湖 → Spark 清洗 → Hive 建表 → 离线 SQL → ALS 训练及推荐 → Kafka 回放 → Streaming**。
+
+运行完成后，用下面的命令确认看板需要的结果已生成。
+
+```bash
+"$HADOOP_HOME/bin/hdfs" dfs -ls /movie/result/offline /movie/result/recommendations
+"$HADOOP_HOME/bin/hdfs" dfs -ls /movie/result/realtime/latest.json
+```
+
+### 4. 在宿主机启动看板
+
+在 **Windows PowerShell** 进入宿主机上克隆的仓库目录。安装 Python 3.11 后执行以下命令，先将三个 `<…-IP>` 占位符换成虚拟机的实际 NAT IPv4 地址。可在各虚拟机运行 `ip -4 -o addr show scope global` 查看。
+
+```powershell
+py -3.11 -m venv .venv
+& .\.venv\Scripts\python.exe -m pip install -r dashboard/requirements.txt
+
+$env:MOVIELENS_WEBHDFS = 'http://<NameNode-IP>:9870/webhdfs/v1'
+$env:MOVIELENS_DATANODES = '{"datanode1":"<DataNode1-IP>","datanode2":"<DataNode2-IP>"}'
+$env:MOVIELENS_KAFKA_BOOTSTRAP = '<NameNode-IP>:9092'
+& .\.venv\Scripts\python.exe dashboard/app.py --port 5066
+```
+
+终端显示 `Running on http://127.0.0.1:5066` 后，在**运行 Flask 的电脑**上用浏览器打开 `http://127.0.0.1:5066/`。总览应显示 **1,000,209 条评分**，页面应显示 **10 张图表**，查询用户 `1` 应返回 **10 条推荐**。如果页面能打开但读不到数据，先检查宿主机到 NameNode 的 `9870` 端口和两台 DataNode 的 `9864` 端口是否可达。
+
+<details>
+<summary>使用 Linux 启动看板</summary>
+
+```bash
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r dashboard/requirements.txt
+export MOVIELENS_WEBHDFS='http://<NameNode-IP>:9870/webhdfs/v1'
+export MOVIELENS_DATANODES='{"datanode1":"<DataNode1-IP>","datanode2":"<DataNode2-IP>"}'
+export MOVIELENS_KAFKA_BOOTSTRAP='<NameNode-IP>:9092'
+.venv/bin/python dashboard/app.py --port 5066
+```
+
+</details>
+
+## 看板预览
+
 ![MovieLens 电影评分分析与推荐看板](docs/images/dashboard.png)
 
 ## 功能
@@ -25,24 +95,6 @@ flowchart LR
     H --> I["Flask REST API"]
     I --> J["ECharts 看板"]
 ```
-
-## 快速启动
-
-已有项目 HDFS 产物时，使用 Python 3.11 启动看板。先进入克隆得到的仓库目录。
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -r dashboard/requirements.txt
-export MOVIELENS_WEBHDFS='http://namenode:9870/webhdfs/v1'
-export MOVIELENS_DATANODES='{"datanode1":"datanode1","datanode2":"datanode2"}'
-export MOVIELENS_KAFKA_BOOTSTRAP='namenode:9092'
-python dashboard/app.py --port 5066
-```
-
-Windows PowerShell 使用 `& .\.venv\Scripts\Activate.ps1` 激活环境，使用 `$env:变量名 = '值'` 设置环境变量。将配置里的主机名替换为运行 Flask 的电脑可访问的地址。`.env.example` 列出变量名和示例值，可将对应变量导入终端。
-
-打开 [本机看板](http://127.0.0.1:5066/) 即可查看。第一次使用 VMware 的同学先阅读 [三台虚拟机复现指南](docs/vmware.md) 搭好环境，然后按 [部署与复现](docs/deployment.md) 生成数据和结果。
 
 ## 目录
 
