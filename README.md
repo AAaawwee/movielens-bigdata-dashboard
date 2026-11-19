@@ -6,6 +6,8 @@
 
 第一次复现按 **准备三台 VM → 生成数据和结果 → 启动看板** 的顺序执行。已有项目集群和 HDFS 结果时，可确认三台 VM 已启动后直接进入 [第 4 步](#4-在宿主机启动看板)。
 
+**拿到前一位同学已清洗的三节点磁盘时，可以跳过数据下载和清洗。** 先看 [三台 VM 配置和从清洗层继续运行的方法](infra/vmware/README.md#使用已清洗数据继续运行)。
+
 ### 1. 准备三台 VMware 虚拟机
 
 在 VMware Workstation 启动或创建 `namenode`、`datanode1`、`datanode2`，三台连接到同一个 NAT 网络。首次配置按 [VMware 三节点复现指南](docs/vmware.md) 设置主机名、IP、SSH 和 Hadoop，初始化 Hive。使用已有课程镜像的同学也可以按指南导入。
@@ -32,6 +34,15 @@ cd movielens-bigdata-dashboard
 ```
 
 ### 3. 在 NameNode 生成数据和结果
+
+已导入带原始数据和清洗结果的课程镜像时，在 NameNode 的仓库目录运行下列命令，从清洗结果继续。
+
+```bash
+bash scripts/resume-from-clean.sh --check
+bash scripts/resume-from-clean.sh --run
+```
+
+从空集群安装时走完整流程。
 
 从 [GroupLens](https://grouplens.org/datasets/movielens/1m/) 下载并解压 MovieLens 1M，在 **NameNode 的仓库目录**按 [部署与复现命令](docs/deployment.md#在集群上生成数据与结果) 依次执行 **HDFS 入湖 → Spark 清洗 → Hive 建表 → 离线 SQL → ALS 训练及推荐 → Kafka 回放 → Streaming**。
 
