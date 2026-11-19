@@ -42,7 +42,7 @@ python dashboard/app.py --port 5066
 
 Windows PowerShell 使用 `& .\.venv\Scripts\Activate.ps1` 激活环境，使用 `$env:变量名 = '值'` 设置环境变量。将配置里的主机名替换为运行 Flask 的电脑可访问的地址。`.env.example` 列出变量名和示例值，可将对应变量导入终端。
 
-打开 [本机看板](http://127.0.0.1:5066/) 即可查看。新集群按 [部署与复现](docs/deployment.md) 准备数据并生成产物。
+打开 [本机看板](http://127.0.0.1:5066/) 即可查看。第一次使用 VMware 的同学先阅读 [三台虚拟机复现指南](docs/vmware.md) 搭好环境，然后按 [部署与复现](docs/deployment.md) 生成数据和结果。
 
 ## 目录
 
@@ -54,6 +54,7 @@ Windows PowerShell 使用 `& .\.venv\Scripts\Activate.ps1` 激活环境，使用
 | [pipeline/offline/](pipeline/offline/) | Spark SQL 离线统计 |
 | [pipeline/als/](pipeline/als/) | Scala ALS 作业及 PySpark 版本 |
 | [pipeline/streaming/](pipeline/streaming/) | Kafka 回放和 Structured Streaming |
+| [infra/hadoop/](infra/hadoop/) | 三节点 Hadoop 配置模板 |
 | [verification/](verification/) | Hive、Kafka、页面回归核验 |
 | [docs/](docs/) | 复现说明、验收结果和页面截图 |
 

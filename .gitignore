@@ -7,6 +7,10 @@ __pycache__/
 .env.*
 !.env.example
 /data/
+ml-1m/
+ratings.dat
+movies.dat
+users.dat
 /outputs/
 /verification/logs/
 /verification/screenshots/
@@ -16,6 +20,15 @@ __pycache__/
 *.tgz
 *.zip
 *.parquet
+*.vmdk
+*.vmx
+*.vmem
+*.vmss
+*.vmsn
+*.ova
+*.ovf
+*.7z
+*.rar
 /pipeline/streaming/kafka_*/
 /pipeline/streaming/kafka-data/
 /pipeline/streaming/kafka-stage5.properties

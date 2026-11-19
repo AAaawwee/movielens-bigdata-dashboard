@@ -2,6 +2,8 @@
 
 原集群使用 Hadoop 3.2.0、Spark 3.1.2（Scala 2.12）、Hive 3.1.2 和 Kafka 3.9.2，计算任务由 YARN 调度。Flask 已在 Python 3.11 验证。准备能访问彼此的 NameNode、DataNode 和 YARN，检查 SSH、主机名和时间同步，并确保 Hadoop 客户端配置与集群一致。
 
+如果三台虚拟机尚未准备好，先执行 [VMware 三节点搭建指南](vmware.md)。
+
 ## 在集群上生成数据与结果
 
 在仓库根目录执行。调整 Hadoop、Spark 和 Hive 的安装路径，下面的例子使用 NameNode 上常见的安装目录。
@@ -17,7 +19,7 @@ export MOVIELENS_HDFS_BASE=hdfs://namenode:9000/movie
 "$HADOOP_HOME/bin/yarn" node -list
 ```
 
-从 [GroupLens](https://grouplens.org/datasets/movielens/1m/) 下载并解压 MovieLens 1M。命令中的 `/path/to/ml-1m` 是包含 `ratings.dat`、`movies.dat` 和 `users.dat` 的目录。
+从 [GroupLens](https://grouplens.org/datasets/movielens/1m/) 下载并解压 MovieLens 1M。下面的命令需在 NameNode 的仓库目录执行，并把数据路径替换为包含 `ratings.dat`、`movies.dat` 和 `users.dat` 的目录。
 
 ```bash
 bash pipeline/ingest/load_raw.sh /path/to/ml-1m
