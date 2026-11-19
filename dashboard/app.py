@@ -1,0 +1,280 @@
+import argparse
+import json
+import os
+import socket
+from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+from threading import Lock
+from urllib.parse import quote, urlencode, urlsplit
+from urllib.request import ProxyHandler, build_opener
+
+import pyarrow as pa
+import pyarrow.parquet as parquet
+from flask import Flask, jsonify, render_template, request
+
+
+ROOT = Path(__file__).resolve().parent
+OFFLINE = "/movie/result/offline"
+RECOMMENDATIONS = "/movie/result/recommendations"
+REALTIME = "/movie/result/realtime/latest.json"
+WINDOW_FIELDS = {"window_start", "window_end", "rating_count", "avg_rating",
+                 "low_rating_ratio", "active_user_count", "alert_level", "batch_id"}
+
+
+class WebHDFS:
+    def __init__(self, root, user, datanodes):
+        self.root = root.rstrip("/")
+        self.user = user
+        self.datanodes = datanodes
+        self.opener = build_opener(ProxyHandler({}))
+
+    def _get(self, url):
+        with self.opener.open(url, timeout=5) as response:
+            return response.read()
+
+    def _query(self, path, operation, **options):
+        query = urlencode({"op": operation, "user.name": self.user, **options})
+        return json.loads(self._get(f"{self.root}{quote(path, safe='/')}?{query}"))
+
+    def read(self, path):
+        location = urlsplit(self._query(path, "OPEN", noredirect="true")["Location"])
+        address = self.datanodes.get(location.hostname, location.hostname)
+        if location.scheme != "http" or address not in self.datanodes.values() or not location.port:
+            raise ValueError(f"Unexpected WebHDFS redirect: {location.hostname}")
+        target = location._replace(netloc=f"{address}:{location.port}")
+        return self._get(target.geturl())
+
+    def parts(self, path, suffix):
+        entries = self._query(path, "LISTSTATUS")["FileStatuses"]["FileStatus"]
+        names = {entry["pathSuffix"] for entry in entries if entry["type"] == "FILE"}
+        parts = sorted(name for name in names if name.startswith("part-") and name.endswith(suffix))
+        if "_SUCCESS" not in names or not parts:
+            raise ValueError(f"No completed snapshot in {path}")
+        return [f"{path}/{name}" for name in parts]
+
+    def json_lines(self, path):
+        return [json.loads(line) for line in self.read(path).splitlines() if line.strip()]
+
+    def json_snapshot(self, path):
+        return [row for part in self.parts(path, ".json") for row in self.json_lines(part)]
+
+    def parquet_rows(self, path, columns=None):
+        return [row for part in self.parts(path, ".parquet")
+                for row in parquet.ParquetFile(pa.BufferReader(self.read(part))).read(
+                    columns=columns, use_threads=False).to_pylist()]
+
+
+class DashboardData:
+    def __init__(self, hdfs, cache_file, bootstrap):
+        self.hdfs = hdfs
+        self.cache_file = cache_file
+        self.bootstrap = bootstrap
+        self.static_lock = Lock()
+        self.realtime_lock = Lock()
+        self._offline = None
+        self._hourly = None
+        self._movie_scores = None
+        self._recommendations = None
+        self._movies = None
+        self._snapshot = None
+
+    def movies(self):
+        if self._movies is None:
+            self._movies = {}
+            for line in self.hdfs.read("/movie/raw/movies.dat").decode("latin-1").splitlines():
+                movie_id, title, genres = line.split("::", 2)
+                self._movies[int(movie_id)] = {"title": title, "genres": genres.split("|")}
+        return self._movies
+
+    def offline(self):
+        with self.static_lock:
+            if self._offline is None:
+                daily = self.hdfs.parquet_rows(f"{OFFLINE}/daily_trend",
+                                               ["rating_date", "rating_count", "avg_rating", "active_users"])
+                daily.sort(key=lambda row: row["rating_date"])
+                monthly = defaultdict(int)
+                monthly_score = defaultdict(float)
+                month_weekday = [[0] * 7 for _ in range(12)]
+                for row in daily:
+                    day, count = row["rating_date"], row["rating_count"]
+                    month = day.isoformat()[:7]
+                    monthly[month] += count
+                    monthly_score[month] += count * row["avg_rating"]
+                    month_weekday[day.month - 1][day.weekday()] += count
+                histogram = self.hdfs.parquet_rows(f"{OFFLINE}/rating_distribution")
+                users = self.hdfs.parquet_rows(f"{OFFLINE}/user_stats", ["user_id"])
+                self._offline = {
+                    "rating_count": sum(monthly.values()), "movie_count": len(self.movies()),
+                    "user_count": len(users),
+                    "monthly": [{"month": month, "rating_count": count}
+                                for month, count in sorted(monthly.items())],
+                    "monthly_averages": [round(monthly_score[month] / monthly[month], 4) for month in sorted(monthly)],
+                    "daily": [[row["rating_date"].isoformat(), row["rating_count"]] for row in daily],
+                    "daily_active_users": [[row["rating_date"].isoformat(), row["active_users"]] for row in daily],
+                    "month_weekday": month_weekday,
+                    "distribution": sorted(histogram, key=lambda row: row["stars"]),
+                    "genres": self.hdfs.json_snapshot(f"{OFFLINE}/flask_snapshot/genre_stats"),
+                    "ranking": self.hdfs.json_snapshot(f"{OFFLINE}/flask_snapshot/movie_stats"),
+                }
+            return self._offline
+
+    def hourly(self):
+        with self.static_lock:
+            if self._hourly is None:
+                rows = self.hdfs.parquet_rows(f"{OFFLINE}/hourly_stats", ["rating_hour", "rating_count"])
+                self._hourly = sorted(rows, key=lambda row: row["rating_hour"])
+            return self._hourly
+
+    def movie_scores(self):
+        with self.static_lock:
+            if self._movie_scores is None:
+                rows = self.hdfs.parquet_rows(f"{OFFLINE}/movie_stats", ["title", "rating_count", "avg_rating"])
+                self._movie_scores = [row for row in rows if row["rating_count"] >= 50]
+            return self._movie_scores
+
+    def recommendations(self, user_id):
+        with self.static_lock:
+            if self._recommendations is None:
+                movies = self.movies()
+                indexed = defaultdict(list)
+                columns = ["user_id", "movie_id", "predicted_rating", "recommendation_rank"]
+                for row in self.hdfs.parquet_rows(RECOMMENDATIONS, columns):
+                    movie = movies.get(row["movie_id"], {"title": str(row["movie_id"]), "genres": []})
+                    indexed[row["user_id"]].append({**row, **movie})
+                self._recommendations = indexed
+            return sorted(self._recommendations.get(user_id, ()), key=lambda row: row["recommendation_rank"])
+
+    @staticmethod
+    def validate_windows(windows):
+        if not windows or any(not isinstance(row, dict) or not WINDOW_FIELDS <= row.keys() for row in windows):
+            raise ValueError("Incomplete realtime snapshot")
+        if len({row["batch_id"] for row in windows}) != 1:
+            raise ValueError("Realtime snapshot mixes micro-batches")
+        return sorted(windows, key=lambda row: row["window_start"])
+
+    def _restore_snapshot(self):
+        snapshot = json.loads(self.cache_file.read_text(encoding="utf-8"))
+        snapshot["windows"] = self.validate_windows(snapshot["windows"])
+        return snapshot
+
+    def _save_snapshot(self, snapshot):
+        self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.cache_file.with_suffix(f".{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(self.cache_file)
+
+    def realtime(self):
+        with self.realtime_lock:
+            source = "hdfs"
+            try:
+                windows = self.validate_windows(self.hdfs.json_lines(REALTIME))
+                if self._snapshot is None or self._snapshot["windows"] != windows:
+                    self._snapshot = {"windows": windows, "fetched_at": datetime.now(timezone.utc).isoformat()}
+                    try:
+                        self._save_snapshot(self._snapshot)
+                    except OSError:
+                        pass  # The in-memory snapshot is still available.
+            except (OSError, ValueError, KeyError) as error:
+                source = "cache"
+                if self._snapshot is None:
+                    try:
+                        self._snapshot = self._restore_snapshot()
+                    except (OSError, ValueError, KeyError):
+                        raise RuntimeError("No realtime snapshot is available") from error
+            snapshot = self._snapshot
+
+        try:
+            with socket.create_connection(self.bootstrap, timeout=0.4):
+                reachable = True
+        except OSError:
+            reachable = False
+
+        return {**snapshot, "snapshot_source": source, "kafka_reachable": reachable,
+                "stale": source == "cache" or not reachable, "replay_mode": "historical"}
+
+
+def create_app(config=None):
+    app = Flask(__name__)
+    app.config.from_mapping(
+        WEBHDFS=os.environ.get("MOVIELENS_WEBHDFS", "http://namenode:9870/webhdfs/v1"),
+        HDFS_USER=os.environ.get("MOVIELENS_HDFS_USER", "hadoop"),
+        DATANODES=json.loads(os.environ.get("MOVIELENS_DATANODES", '{}')),
+        KAFKA_BOOTSTRAP=os.environ.get("MOVIELENS_KAFKA_BOOTSTRAP", "namenode:9092"),
+        CACHE_FILE=ROOT / ".cache" / "realtime.json",
+    )
+    app.config.update(config or {})
+    hostname, port = app.config["KAFKA_BOOTSTRAP"].rsplit(":", 1)
+    hdfs_addresses = app.config["DATANODES"]
+    if not hdfs_addresses:
+        hdfs_addresses = {"datanode1": "datanode1", "datanode2": "datanode2"}
+    dashboard = DashboardData(
+        WebHDFS(app.config["WEBHDFS"], app.config["HDFS_USER"], hdfs_addresses),
+        Path(app.config["CACHE_FILE"]), (hostname, int(port)),
+    )
+
+    @app.get("/")
+    def index():
+        return render_template("index.html")
+
+    @app.get("/api/overview")
+    def overview():
+        data = dashboard.offline()
+        return jsonify({key: data[key] for key in ("rating_count", "movie_count", "user_count")})
+
+    @app.get("/api/offline/trend")
+    def offline_trend():
+        data = dashboard.offline()
+        return jsonify({key: data[key] for key in ("monthly", "distribution", "genres", "month_weekday",
+                                                   "daily", "daily_active_users", "monthly_averages")})
+
+    @app.get("/api/offline/hourly")
+    def hourly_activity():
+        return jsonify(hourly=dashboard.hourly())
+
+    @app.get("/api/offline/movie-scores")
+    def movie_scores():
+        return jsonify(movies=dashboard.movie_scores())
+
+    @app.get("/api/movie/ranking")
+    def ranking():
+        return jsonify(movies=dashboard.offline()["ranking"])
+
+    @app.get("/api/recommendations")
+    def recommendations():
+        user_id = request.args.get("user_id", default="1", type=str)
+        if len(user_id) > 10 or not user_id.isascii() or not user_id.isdecimal() or int(user_id) <= 0:
+            return jsonify(error="请输入有效的用户编号"), 400
+        rows = dashboard.recommendations(int(user_id))
+        if not rows:
+            return jsonify(error="该用户没有推荐结果", user_id=int(user_id)), 404
+        return jsonify(user_id=int(user_id), recommendations=rows)
+
+    @app.get("/api/realtime")
+    def realtime():
+        response = jsonify(dashboard.realtime())
+        response.cache_control.no_store = True
+        return response
+
+    @app.get("/api/alerts")
+    def alerts():
+        snapshot = dashboard.realtime()
+        relevant = [row for row in reversed(snapshot["windows"]) if row["alert_level"] in {"HIGH", "MEDIUM"}]
+        return jsonify(alerts=relevant, snapshot_source=snapshot["snapshot_source"], stale=snapshot["stale"])
+
+    @app.errorhandler(OSError)
+    @app.errorhandler(ValueError)
+    @app.errorhandler(KeyError)
+    @app.errorhandler(RuntimeError)
+    def data_unavailable(error):
+        app.logger.warning("Dashboard data unavailable: %s", error)
+        return jsonify(error="暂时无法读取结果，请稍后重试"), 503
+
+    return app
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="MovieLens Flask dashboard")
+    parser.add_argument("--port", default=5066, type=int)
+    args = parser.parse_args()
+    create_app().run(host="127.0.0.1", port=args.port, debug=False, threaded=True)
